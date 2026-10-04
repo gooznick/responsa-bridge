@@ -1,0 +1,9 @@
+# Same dependencies as pyproject.toml (the source of truth), plus pytest,
+# for `pip install -r requirements.txt` without installing the package.
+pywinauto>=0.6.9
+pywin32>=306
+pdfplumber>=0.11
+python-bidi>=0.6
+pytest
+# Pinned -- see the comment in pyproject.toml before bumping.
+mcp==2.2.0

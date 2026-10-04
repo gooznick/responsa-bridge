@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "responsa-bridge"
+version = "0.1.0"
+description = "Drive the Bar-Ilan Responsa Project desktop app from Python or from Claude (MCP server)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Natural Language :: Hebrew",
+]
+dependencies = [
+    "pywinauto>=0.6.9",
+    "pywin32>=306",
+    "pdfplumber>=0.11",
+    "python-bidi>=0.6",
+    # Pinned: responsa_mcp/ depends on real, version-specific internals
+    # (mcp.server.mcpserver.MCPServer, which was called FastMCP and lived at
+    # mcp.server.fastmcp before mcp 2.x; the exact ToolError-vs-plain-
+    # exception error-reporting behavior) -- confirmed live against 2.2.0,
+    # verify responsa_mcp/ still works before bumping this.
+    "mcp==2.2.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+responsa-bridge-mcp = "responsa_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["responsa_api*", "responsa_mcp*"]
+
+[tool.setuptools.package-data]
+"responsa_api.internal.versions" = ["v33_browse_cache/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: real GUI test against a huge/slow Responsa query; excluded by default (run with `-m slow`)",
+]
+addopts = "-m \"not slow\""

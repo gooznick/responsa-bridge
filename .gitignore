@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pdf
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Leftover logs/caches from the old api/ layout (logs now live in
+# %LOCALAPPDATA%\responsa-bridge\logs).
+api/
+
+# Local research output, not part of the project.
+jam/
+stairs*/
+
+# Local Claude Code permission overrides -- personal, not shared.
+.claude/settings.local.json
