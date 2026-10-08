@@ -267,6 +267,10 @@ PRINT_SHORTCUT = "^p"
 # exactly the same moment, purely coincidentally, and would otherwise get
 # mistaken for it.
 PRINT_DIALOG_TITLE = "Print"
+# Like the Save dialog below, its title follows the Windows display
+# language (Hebrew: "הדפסה"). _is_print_dialog also recognizes it
+# structurally, by its page-range controls (PRINT_RANGE_* below).
+PRINT_DIALOG_TITLES = (PRINT_DIALOG_TITLE, "הדפסה")
 
 # The Windows common Save dialog that "Microsoft Print to PDF" opens.
 # Its title is in English regardless of the app's Hebrew UI (confirmed
@@ -278,6 +282,11 @@ PRINT_DIALOG_TITLE = "Print"
 # populated) hwnd. Always re-resolve this dialog by title right before
 # acting on it; never hold onto a captured hwnd across a wait/poll.
 SAVE_DIALOG_TITLE = "Save Print Output As"
+# The same dialog's title follows the Windows display language, not the
+# app's: on a Hebrew Windows it is the Hebrew string below. Any title in this
+# tuple identifies it (the structural check in
+# automation._find_current_save_dialog covers other languages).
+SAVE_DIALOG_TITLES = (SAVE_DIALOG_TITLE, "שמירת פלט הדפסה כ")
 # Its "&Save" button -- a standard Win32 "Button", confirmed live
 # (read-only control dump of an open instance). Clicked via
 # BM_CLICK instead of pressing Enter, which needs the dialog to hold real

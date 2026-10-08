@@ -584,12 +584,28 @@ class ResponsaAutomation:
             )
         self._dismiss_leftover_dialogs()
 
-        self._bring_to_foreground(self._last_results_hwnd)
         # POST, not send -- see _post_command's docstring: this specific
         # command opens a modal dialog, and a blocking send would deadlock
         # this thread against the dialog it's about to go find below.
-        self._post_command(self._main_hwnd, cfg.COMMAND_SKIP_TO_NUMBER)
-        dialog_hwnd = self._find_visible_dialog(cfg.SKIP_TO_NUMBER_DIALOG_TITLE)
+        #
+        # The command is routed by MFC to the ACTIVE MDI child, so the
+        # results window has to be the active one, and a posted command
+        # that gets dropped (seen once through the MCP server: the dialog
+        # never opened, 10s timeout, on a fetch right after a successful
+        # one) is posted again after re-activating it.
+        attempts = 3
+        for attempt in range(attempts):
+            self._activate_mdi_child(self._last_results_hwnd)
+            self._bring_to_foreground(self._last_results_hwnd)
+            self._post_command(self._main_hwnd, cfg.COMMAND_SKIP_TO_NUMBER)
+            try:
+                dialog_hwnd = self._find_visible_dialog(
+                    cfg.SKIP_TO_NUMBER_DIALOG_TITLE,
+                    timeout=10 if attempt == attempts - 1 else 4)
+                break
+            except ResponsaTimeoutError:
+                if attempt == attempts - 1:
+                    raise
         self._set_edit_text(dialog_hwnd, cfg.SKIP_TO_NUMBER_EDIT_ID, str(index))
         # Verify the OK really closed the dialog. Real bug:
         # the OK click was lost, the dialog stayed open on screen (the
@@ -1065,13 +1081,15 @@ class ResponsaAutomation:
                     self._close_summary_dialog(hwnd)
                     break
 
-                if title == "" and self._is_info_dialog(hwnd):
+                if self._is_info_dialog(hwnd, title):
                     message = self._read_dialog_static_texts(hwnd)
                     if cfg.NO_RESULTS_MARKER in message:
-                        self._click_control(hwnd, cfg.NO_RESULTS_DECLINE_BUTTON_ID)
+                        self._click_control(hwnd, self._info_dialog_button_id(
+                            hwnd, cfg.NO_RESULTS_DECLINE_BUTTON_ID))
                         return ("no_results", None)
                     if cfg.TOO_MANY_RESULTS_MARKER in message:
-                        self._click_control(hwnd, cfg.TOO_MANY_RESULTS_ABORT_BUTTON_ID)
+                        self._click_control(hwnd, self._info_dialog_button_id(
+                            hwnd, cfg.TOO_MANY_RESULTS_ABORT_BUTTON_ID))
                         raise ResponsaTooManyResultsError(message)
                     raise ResponsaSearchError(f"Unexpected info dialog: {message!r}")
 
@@ -1086,7 +1104,7 @@ class ResponsaAutomation:
                     self._click_control(hwnd, cfg.INVALID_QUERY_DISMISS_BUTTON_ID)
                     raise ResponsaInvalidQueryError(message)
 
-                if title == cfg.PRINT_DIALOG_TITLE:
+                if self._is_print_dialog(hwnd):
                     # Our own _probe_print_dialog's Ctrl+P can legitimately
                     # take longer than its own 1s polling window to
                     # actually open this dialog -- confirmed live:
@@ -1251,7 +1269,7 @@ class ResponsaAutomation:
                 if hwnd in before:
                     continue
                 if win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "#32770" \
-                        and win32gui.GetWindowText(hwnd) == self.config.PRINT_DIALOG_TITLE:
+                        and self._is_print_dialog(hwnd):
                     return hwnd
             time.sleep(0.1)
         return None
@@ -1333,8 +1351,27 @@ class ResponsaAutomation:
                     and win32gui.GetWindowText(hwnd).endswith(cfg.RESULTS_SUMMARY_TITLE_SUFFIX):
                 self._close_summary_dialog(hwnd)
 
-    def _is_info_dialog(self, hwnd: int) -> bool:
+    def _info_dialog_button_id(self, hwnd: int, preferred_id: int) -> int:
+        """The control id to click to dismiss an info dialog: `preferred_id`
+        when the dialog has it (the Yes/No/Cancel-style dialogs seen on the
+        original machine), else the dialog's first visible push button (a
+        plain message box with only an OK button, id 1 or 2, seen on other
+        installs)."""
+        buttons = [c for c in winutil.find_descendants(hwnd, class_name="Button")
+                   if win32gui.IsWindowVisible(c)]
+        ids = [win32gui.GetDlgCtrlID(c) for c in buttons]
+        if preferred_id in ids or not ids:
+            return preferred_id
+        return ids[0]
+
+    def _is_info_dialog(self, hwnd: int, title: str = "") -> bool:
         heading = self.config.INFO_DIALOG_HEADING_TEXT
+        # Some installs show a plain titled message box ("מידע" as the
+        # window title) instead of an untitled dialog with a heading Static.
+        if title == heading:
+            return True
+        if title != "":
+            return False
         for child in winutil.find_descendants(hwnd, class_name="Static"):
             if win32gui.GetWindowText(child) == heading:
                 return True
@@ -1450,8 +1487,12 @@ class ResponsaAutomation:
                     continue
                 if not win32gui.IsWindowVisible(hwnd) or win32gui.GetClassName(hwnd) != "#32770":
                     continue
-                if title is not None and win32gui.GetWindowText(hwnd) != title:
-                    continue
+                if title is not None:
+                    if title == self.config.PRINT_DIALOG_TITLE:
+                        if not self._is_print_dialog(hwnd):
+                            continue
+                    elif win32gui.GetWindowText(hwnd) != title:
+                        continue
                 return hwnd
             return None
 
@@ -1656,8 +1697,7 @@ class ResponsaAutomation:
         print job is over (the main window enabled again, i.e. no modal
         progress dialog left) before returning."""
         cfg = self.config
-        if self._find_current_save_dialog() is None and \
-                self._visible_dialog_or_none(cfg.PRINT_DIALOG_TITLE) is None:
+        if self._find_current_save_dialog() is None and self._find_print_dialog() is None:
             return
         discard = os.path.join(self.pdf_dir, f"responsa_discard_{uuid.uuid4().hex}.pdf")
         deadline = time.time() + timeout
@@ -1668,7 +1708,7 @@ class ResponsaAutomation:
                 except ResponsaError:
                     pass  # re-checked on the next round
             else:
-                print_hwnd = self._visible_dialog_or_none(cfg.PRINT_DIALOG_TITLE)
+                print_hwnd = self._find_print_dialog()
                 if print_hwnd is not None and win32gui.IsWindowEnabled(print_hwnd):
                     win32gui.PostMessage(print_hwnd, win32con.WM_COMMAND, win32con.IDCANCEL, 0)
                 elif print_hwnd is None and win32gui.IsWindowEnabled(self._main_hwnd):
@@ -1686,9 +1726,40 @@ class ResponsaAutomation:
             except OSError:
                 pass  # best effort; it's only a temp file
 
-    def _find_current_save_dialog(self) -> Optional[int]:
+    def _is_print_dialog(self, hwnd: int) -> bool:
+        """True for the Print dialog, whatever language Windows shows its
+        title in: a known title, or (structurally) the standard
+        page-range radios every Windows print dialog has."""
+        titles = getattr(self.config, "PRINT_DIALOG_TITLES", (self.config.PRINT_DIALOG_TITLE,))
+        if win32gui.GetWindowText(hwnd) in titles:
+            return True
+        if win32gui.GetClassName(hwnd) != "#32770":
+            return False
+        try:
+            win32gui.GetDlgItem(hwnd, self.config.PRINT_RANGE_ALL_RADIO_ID)
+            win32gui.GetDlgItem(hwnd, self.config.PRINT_RANGE_PAGES_RADIO_ID)
+        except win32gui.error:
+            return False
+        return True
+
+    def _find_print_dialog(self) -> Optional[int]:
         for hwnd in winutil.enum_top_level_windows_for_pids([self._pid]):
-            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == self.config.SAVE_DIALOG_TITLE:
+            if win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "#32770" \
+                    and self._is_print_dialog(hwnd):
+                return hwnd
+        return None
+
+    def _find_current_save_dialog(self) -> Optional[int]:
+        titles = getattr(self.config, "SAVE_DIALOG_TITLES", (self.config.SAVE_DIALOG_TITLE,))
+        for hwnd in winutil.enum_top_level_windows_for_pids([self._pid]):
+            if not win32gui.IsWindowVisible(hwnd) or win32gui.GetClassName(hwnd) != "#32770":
+                continue
+            if win32gui.GetWindowText(hwnd) in titles:
+                return hwnd
+            # The title is localized with Windows' display language; fall
+            # back on the dialog's structure (an Explorer-style file
+            # dialog with a Save/Cancel pair hosting a shell view).
+            if winutil.find_descendants(hwnd, class_name="SHELLDLL_DefView", visible_only=False):
                 return hwnd
         return None
 
@@ -1770,6 +1841,14 @@ class ResponsaAutomation:
         """
         wparam = win32api.MAKELONG(command_id, 0)
         win32gui.SendMessage(hwnd, win32con.WM_COMMAND, wparam, 0)
+
+    @staticmethod
+    def _activate_mdi_child(hwnd: int):
+        """Make `hwnd` the active child of its MDIClient (WM_MDIACTIVATE),
+        independent of which application window has the keyboard focus."""
+        client = win32gui.GetParent(hwnd)
+        if client and win32gui.GetClassName(client) == "MDIClient":
+            win32gui.SendMessage(client, win32con.WM_MDIACTIVATE, hwnd, 0)
 
     @staticmethod
     def _post_command(hwnd: int, command_id: int):

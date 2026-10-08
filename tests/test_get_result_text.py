@@ -24,7 +24,9 @@ def _normalize(text: str) -> str:
     own independent line-wrapping) can legitimately differ in exactly
     where line breaks/spacing fall, even over identical underlying words.
     """
-    return re.sub(r"\s+", " ", text).strip()
+    # Responsa marks the hit's position inside the full text with a "*"
+    # (it can land between any two words of the snippet), so ignore it.
+    return re.sub(r"\s+", " ", text.replace("*", " ")).strip()
 
 
 def test_full_text_contains_the_search_snippet(client):

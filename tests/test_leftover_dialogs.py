@@ -70,12 +70,21 @@ def test_search_after_a_search_that_timed_out(client):
     so did every search after it, until hard_reset()."""
     impl = client._impl
     original_timeout = impl.search_timeout
-    impl.search_timeout = 10
+    # How long SLOW_QUERY takes depends on the machine (35-55s on the
+    # original VM, ~4s on a fast one), so a short timeout alone doesn't
+    # reliably time out. Recreate the state deterministically instead: the
+    # search never gets to close its summary dialog, so it runs into the
+    # timeout with that dialog (and the probe it blocks) still open.
+    impl.search_timeout = 8
+    impl._close_summary_dialog = lambda *a, **k: None
+    impl._close_any_lingering_summary_dialog = lambda *a, **k: None
     try:
         with pytest.raises(ResponsaTimeoutError, match="confirmed-finished"):
             client.search(SLOW_QUERY)
     finally:
         impl.search_timeout = original_timeout
+        del impl._close_summary_dialog
+        del impl._close_any_lingering_summary_dialog
     # The state the next call met in the live failure: Responsa done
     # computing, and the timed-out search's summary dialog open.
     winutil.wait_for(lambda: _summary_dialog(impl), timeout=120, interval=0.5)
