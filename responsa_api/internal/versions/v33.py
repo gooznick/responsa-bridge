@@ -247,6 +247,23 @@ SKIP_TO_NUMBER_CANCEL_BUTTON_ID = 2
 # re-verified as a simulated keystroke against this specific command).
 EXPANDED_RESULTS_SHORTCUT = "^b"
 
+# "Number of lines" ("תצוגה" -> "מספר שורות", Alt+R; also on the results
+# window's right-click menu): how many lines of text are shown per result.
+# Found by the same read-only menu dump as every other COMMAND_*. Like
+# COMMAND_SKIP_TO_NUMBER it opens a MODAL dialog, so it must be POSTED,
+# not sent (see automation._post_command), and MFC routes it to the ACTIVE
+# MDI child, so the results window has to be made active first.
+COMMAND_LINES_PER_RESULT = 32800
+# The dialog it opens, confirmed live: a spin-edit (Edit id 1018 with an
+# msctls_updown32 buddy, id 1201) under the prompt "How many lines to
+# display per result? Enter a number between 1 and 21:". "אישור" (OK) applies it.
+LINES_DIALOG_TITLE = "שורות לתוצאה"
+LINES_EDIT_ID = 1018
+LINES_OK_BUTTON_ID = 1
+LINES_CANCEL_BUTTON_ID = 2
+LINES_MIN = 1
+LINES_MAX = 21
+
 # Extraction: WM_GETTEXT and UI Automation both dead-end on the results
 # window (see above), and Ctrl+A/Ctrl+C only grabs whatever page is
 # currently scrolled into view. Ctrl+P -> Print (Microsoft Print to PDF)

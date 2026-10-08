@@ -44,6 +44,32 @@ def test_search_result_is_json_safe_and_matches_the_direct_api():
     json.dumps(result)  # must not raise
 
 
+def test_lines_per_result_changes_snippet_length_and_default_is_unchanged():
+    async def run():
+        default = await tools.search(QUERY)
+        short = await tools.search(QUERY, lines_per_result=1)
+        long = await tools.search(QUERY, lines_per_result=21)
+        again = await tools.search(QUERY)
+        return default, short, long, again
+
+    default, short, long, again = asyncio.run(run())
+
+    def avg(r):
+        return sum(len(h["snippet"]) for h in r["hits"]) / len(r["hits"])
+
+    assert len(short["hits"]) == len(long["hits"]) == len(default["hits"]) == 3
+    assert avg(long) > avg(short)
+    # Omitting it is exactly the old behavior, and nothing sticks.
+    assert [h["snippet"] for h in again["hits"]] == [h["snippet"] for h in default["hits"]]
+    json.dumps(long)
+
+
+@pytest.mark.parametrize("bad", [0, 22, -5])
+def test_lines_per_result_out_of_range_is_a_clear_tool_error(bad):
+    with pytest.raises(ToolError, match="lines_per_result"):
+        asyncio.run(tools.search(QUERY, lines_per_result=bad))
+
+
 def test_first_tool_call_lazily_starts_the_shared_client():
     assert lifecycle._client is None
     asyncio.run(tools.search(QUERY))

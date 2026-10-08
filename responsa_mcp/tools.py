@@ -62,9 +62,25 @@ async def search(
     books: Optional[List[str]] = None,
     search_all_databases: bool = True,
     max_hits: Optional[int] = None,
+    lines_per_result: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run a query against Responsa (the Bar-Ilan Responsa Project) and
     return its results.
+
+    QUICK RULES (read first; this is NOT a web/natural-language search):
+      1. Words separated by a space must appear ADJACENT, in exactly that
+         order. Two or three space-separated words is therefore an exact
+         phrase and usually finds nothing. To find words that merely occur
+         near each other, put a window between them: `word1 [-5:5] word2`.
+      2. Never type a whole sentence or an exact quote. Use 1-3 key words,
+         and use wildcards on each: `*word*` (any prefix/suffix) or
+         `#word#` (only real Hebrew prefix/suffix), e.g.
+         `#שחיטה# [-8:8] #מכונה#`. A bare word matches only that exact form.
+      3. Alternatives: `(word1/word2)`. No other punctuation: parentheses
+         only for `(a/b)` groups; no quotes, no abbreviation marks (write
+         רמבם, not רמב"ם).
+      4. Start broad (one word + wildcards, small `max_hits`), then narrow
+         by adding a second word with a `[-N:N]` window.
 
     NEVER call this in parallel with another call to this tool or to
     get_result_text/browse/hard_reset -- Responsa automates a real
@@ -123,17 +139,30 @@ async def search(
     `total_hits` is the real count, `truncated` says whether `hits` was
     cut short) -- use it for queries that might match thousands of
     results, since extracting a large result set is slow (roughly 3
-    seconds per page).
+    seconds per page). `lines_per_result` (integer 1-21; omit for
+    Responsa's default, which is 3) sets how many lines of text are shown
+    per result, i.e. how long each hit's `snippet` is: raise it to see
+    more context around each match, lower it for a compact list. More
+    lines make the extraction slower (more pages).
 
     If a call fails because another window has focus or the Windows
     session is locked, retrying (or hard_reset) won't help -- tell the
     user, who has to leave the computer alone / unlock it. For other
     repeated failures, hard_reset restarts Responsa."""
+    if lines_per_result is not None and (
+        isinstance(lines_per_result, bool) or not 1 <= lines_per_result <= 21
+    ):
+        # ToolError, not ValueError -- see get_result_text below / lifecycle.locked_call:
+        # only ToolError's message reaches the calling agent.
+        raise ToolError(
+            f"lines_per_result must be an integer from 1 to 21, got {lines_per_result!r}"
+        )
     resolved = resolve_books(books)
     result = await locked_call(
         lambda client: client.search(
             query, books=resolved,
             search_all_databases=search_all_databases, max_hits=max_hits,
+            lines_per_result=lines_per_result,
         )
     )
     return to_jsonable(result)

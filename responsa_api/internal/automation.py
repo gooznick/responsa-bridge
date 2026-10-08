@@ -98,6 +98,15 @@ class ResponsaAutomation:
     # short of the requested max_hits, which would be a real bug). Used
     # to convert a hit cap into a page-range cap for the Print dialog.
     MIN_HITS_PER_PAGE = 4
+    # Same lower bound when `lines_per_result` is high: each hit then takes
+    # more of a page. Measured live on a 143-hit search (full export):
+    # 21 lines -> 42 pages (3.4 hits/page), 3 lines (the app's default) ->
+    # 16 pages (8.9), 1 line -> 10 pages (14). Up to about 12 lines the
+    # plain MIN_HITS_PER_PAGE still holds (~98/(lines+8) hits per page);
+    # above that, 2 keeps a safety margin under the 3.4 measured at the
+    # maximum of 21.
+    MIN_HITS_PER_PAGE_MANY_LINES = 2
+    MANY_LINES_THRESHOLD = 12
 
     def __init__(self, launch_timeout: float = 60,
                  search_timeout: float = 60, pdf_export_timeout: float = 3600,
@@ -136,6 +145,9 @@ class ResponsaAutomation:
         # all, if even the smallest extraction wouldn't fit.
         self.time_budget = time_budget
         self.pdf_dir = pdf_dir or tempfile.gettempdir()
+        # The `lines_per_result` of the search currently being exported
+        # (None = the app's own setting); read by _limit_print_page_range.
+        self._export_lines_per_result: Optional[int] = None
 
         self._pid: Optional[int] = None
         self._main_hwnd: Optional[int] = None
@@ -382,6 +394,7 @@ class ResponsaAutomation:
         books: Optional[BookScopeInput] = None,
         search_all_databases: bool = True,
         max_hits: Optional[int] = None,
+        lines_per_result: Optional[int] = None,
     ) -> SearchResults:
         """Run one query through Advanced Search mode and return structured
         hits (the user-facing contract is documented on
@@ -399,9 +412,15 @@ class ResponsaAutomation:
         `max_hits` is chosen automatically to fit, and if even the smallest
         extraction wouldn't fit, ResponsaTimeoutError is raised before the
         export starts at all.
+
+        `lines_per_result`, if given, is applied to the results window
+        through its "מספר שורות" dialog (see _set_lines_per_result) before
+        extraction; None leaves the app's own setting untouched.
         """
         if self._main_hwnd is None:
             raise ResponsaError("start() must be called before search()")
+        if lines_per_result is not None:
+            self._validate_lines_per_result(lines_per_result)
 
         cfg = self.config
         # This search's own COMMAND_CLOSE_ALL_WINDOWS below is about to
@@ -526,8 +545,15 @@ class ResponsaAutomation:
         self._last_results_hwnd = results_hwnd
         self._last_total_hits = reported_count
 
-        pdf_path = self._export_to_pdf(results_hwnd, max_hits=effective_max_hits,
-                                        pdf_export_timeout=pdf_export_timeout)
+        if lines_per_result is not None:
+            self._set_lines_per_result(results_hwnd, lines_per_result)
+
+        self._export_lines_per_result = lines_per_result
+        try:
+            pdf_path = self._export_to_pdf(results_hwnd, max_hits=effective_max_hits,
+                                            pdf_export_timeout=pdf_export_timeout)
+        finally:
+            self._export_lines_per_result = None
         results = parse_results_pdf(pdf_path)
         if reported_count is None and (effective_max_hits is None or len(results.hits) < effective_max_hits):
             # No count in the title, but fewer hits came out than the cap
@@ -1377,6 +1403,56 @@ class ResponsaAutomation:
                 return True
         return False
 
+    def _validate_lines_per_result(self, lines: int):
+        cfg = self.config
+        if isinstance(lines, bool) or not isinstance(lines, int) or not (cfg.LINES_MIN <= lines <= cfg.LINES_MAX):
+            raise ValueError(
+                f"lines_per_result must be an integer between {cfg.LINES_MIN} and "
+                f"{cfg.LINES_MAX} (Responsa's own limits), got {lines!r}"
+            )
+
+    def _set_lines_per_result(self, results_hwnd: int, lines: int):
+        """Set "how many lines to show per result" on the results window,
+        the way it is done by hand: "תצוגה" -> "מספר שורות" (Alt+R), type
+        the number, "אישור".
+
+        Same recipe as get_result_text's "Skip to number": the command
+        opens a MODAL dialog, so it is POSTED (a blocking send would
+        deadlock this thread against the dialog it is about to find), and
+        MFC routes it to the ACTIVE MDI child, so the results window is
+        activated first and the post repeated if the dialog never shows.
+        """
+        cfg = self.config
+        attempts = 3
+        for attempt in range(attempts):
+            self._activate_mdi_child(results_hwnd)
+            self._bring_to_foreground(results_hwnd)
+            self._post_command(self._main_hwnd, cfg.COMMAND_LINES_PER_RESULT)
+            try:
+                dialog_hwnd = self._find_visible_dialog(
+                    cfg.LINES_DIALOG_TITLE,
+                    timeout=10 if attempt == attempts - 1 else 4)
+                break
+            except ResponsaTimeoutError:
+                if attempt == attempts - 1:
+                    raise
+        self._set_edit_text(dialog_hwnd, cfg.LINES_EDIT_ID, str(lines))
+        try:
+            self._click_and_wait(
+                dialog_hwnd, cfg.LINES_OK_BUTTON_ID,
+                lambda: (not win32gui.IsWindow(dialog_hwnd)
+                         or not win32gui.IsWindowVisible(dialog_hwnd)) or None,
+                what=f"OK in {cfg.LINES_DIALOG_TITLE!r} (the dialog stayed open)",
+            )
+        except ResponsaError:
+            # Don't leave it open to block the next call.
+            if win32gui.IsWindow(dialog_hwnd):
+                self._click_control(dialog_hwnd, cfg.LINES_CANCEL_BUTTON_ID)
+            raise
+        # Applying re-lays-out the results window; let it settle before
+        # the Print dialog is opened on it.
+        time.sleep(0.5)
+
     def _ensure_expanded_display(self):
         """Sent as WM_COMMAND to the main frame, not a keystroke to
         results_hwnd -- MFC's command routing sends frame-level View-menu
@@ -1465,7 +1541,11 @@ class ResponsaAutomation:
         count afterward.
         """
         cfg = self.config
-        max_page = -(-max_hits // self.MIN_HITS_PER_PAGE)  # ceil division
+        hits_per_page = self.MIN_HITS_PER_PAGE
+        lines = self._export_lines_per_result
+        if lines is not None and lines > self.MANY_LINES_THRESHOLD:
+            hits_per_page = self.MIN_HITS_PER_PAGE_MANY_LINES
+        max_page = -(-max_hits // hits_per_page)  # ceil division
         self._click_control(print_hwnd, cfg.PRINT_RANGE_PAGES_RADIO_ID)
         from_edit = winutil.find_child_by_id(print_hwnd, cfg.PRINT_RANGE_FROM_EDIT_ID)
         to_edit = winutil.find_child_by_id(print_hwnd, cfg.PRINT_RANGE_TO_EDIT_ID)

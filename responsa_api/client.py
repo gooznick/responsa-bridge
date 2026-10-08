@@ -140,6 +140,7 @@ class ResponsaClient:
         books: Optional[BookScopeInput] = None,
         search_all_databases: bool = True,
         max_hits: Optional[int] = None,
+        lines_per_result: Optional[int] = None,
     ) -> SearchResults:
         """Run a query and return its results.
 
@@ -150,6 +151,11 @@ class ResponsaClient:
             query: In Responsa's own query language, space-separated
                 (a word may contain only Hebrew letters and digits, so
                 strip nikud/vowel points first).
+
+                NOTE: space-separated words must be ADJACENT and in that
+                order (an exact phrase); to match words that merely occur
+                near each other use `word1 [-5:5] word2`. Use 1-3 key
+                words with wildcards, never whole sentences.
 
                 IMPORTANT -- a bare word matches ONLY that exact
                 standalone form. This is NOT a fuzzy/substring search
@@ -203,8 +209,15 @@ class ResponsaClient:
                 `.truncated` says whether `hits` was cut short. Use it for
                 queries that may match thousands of results, since
                 extracting a large result set is slow.
+            lines_per_result: How many lines of text Responsa shows per
+                result (its "מספר שורות" setting, Alt+R), from 1 to 21 --
+                so each `Hit.snippet` is longer or shorter. The default,
+                None, leaves Responsa's own setting as it is. The value
+                applies to this search's results only (confirmed live: the
+                next search is back to the app's default).
 
         Raises:
+            ValueError: `lines_per_result` is not an integer from 1 to 21.
             ResponsaInvalidQueryError: Responsa rejected the query (for
                 example it contains nikud or other non-Hebrew characters).
             ResponsaTooManyResultsError: The query matches so many results
@@ -220,6 +233,7 @@ class ResponsaClient:
             books=books,
             search_all_databases=search_all_databases,
             max_hits=max_hits,
+            lines_per_result=lines_per_result,
         )
 
     def get_result_text(self, index: int) -> SourceText:

@@ -121,6 +121,10 @@ is `start()`, `close()`, `hard_reset()`, `search()`, `get_result_text()` and
   `search(..., max_hits=N)` or `ResponsaClient(time_budget=SECONDS)` puts a
   bound on that. `SearchResults.total_hits` and `.truncated` tell you what
   was left out.
+- **`lines_per_result=N`** (1-21) sets how many lines of text Responsa shows
+  per result (its "מספר שורות" option, Alt+R), so each `Hit.snippet` is
+  longer or shorter. Leave it out to keep the app's default. It applies to
+  that search only. More lines means more pages to extract, so it is slower.
 
 ### Query syntax
 
